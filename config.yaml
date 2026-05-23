@@ -1,0 +1,13 @@
+---
+smtp:
+  from: "admin@opstree.com"
+  username: "test"
+  password: "test"
+  smtp_server: "127.0.0.1"
+  smtp_port: "1025"
+
+elasticsearch:
+  username: ""
+  password: ""
+  host: "127.0.0.1"
+  port: 9200

@@ -1,0 +1,5 @@
+nohup: ignoring input
+/home/ubuntu/.local/lib/python3.10/site-packages/elasticsearch/connection/base.py:177: ElasticsearchDeprecationWarning: Elasticsearch built-in security features are not enabled. Without authentication, your cluster could be accessible to anyone. See https://www.elastic.co/guide/en/elasticsearch/reference/7.17/security-minimal-setup.html to enable security.
+  warnings.warn(message, category=ElasticsearchDeprecationWarning)
+loading Config file /home/ubuntu/notification-worker/config.yaml
+2026-04-29 07:55:11,806 — notification-service — INFO — No new employees to notify.
