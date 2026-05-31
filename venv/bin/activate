@@ -38,7 +38,7 @@ deactivate () {
 # unset irrelevant variables
 deactivate nondestructive
 
-VIRTUAL_ENV=/home/ubuntu/notification-worker/venv
+VIRTUAL_ENV=/home/mukesh/OT-Micro-Snatak-P18/notification-worker/venv
 export VIRTUAL_ENV
 
 _OLD_VIRTUAL_PATH="$PATH"

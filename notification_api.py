@@ -51,7 +51,7 @@ def send_mail(email_id):
                 "timeout": 5,
                 "user": cfg.getProperty("smtp.username"),
                 "password": cfg.getProperty("smtp.password"),
-                "tls": False,  
+                "tls": True,  
             },
         )
         logger.info("Sent mail to %s", email_id)
@@ -66,7 +66,7 @@ def send_mail_to_all_users():
     try:
         es = Elasticsearch([f"http://{cfg.getProperty('elasticsearch.host')}:{cfg.getProperty('elasticsearch.port')}"])
         result = es.search(
-            index="employee-management", 
+            index="employee_index", 
             body={
                 "query": {
                     "bool": {
@@ -84,15 +84,31 @@ def send_mail_to_all_users():
             return
 
         for data in hits:
-            email = data["_source"]["email_id"]
+
+            source = data["_source"]
+
+
+
+            if "email_id" not in source:
+
+                logger.warning("Skipping document without email_id: %s", data["_id"])
+
+                continue
+
+
+
+            email = source["email_id"]
+
             doc_id = data["_id"]
-            
+
+
+
             success = send_mail(email)
             
             # Tag the user in Elasticsearch so they aren't emailed again
             if success:
                 es.update(
-                    index="employee-management",
+                    index="employee_index",
                     id=doc_id,
                     body={"doc": {"notified": True}}
                 )
@@ -103,11 +119,11 @@ def send_mail_to_all_users():
 
 def schedule_operation():
     logger = get_logger()
+    logger.info("Notification scheduler started")
     schedule.every(1).minutes.do(send_mail_to_all_users)
     while True:
-        logger.info("Worker heartbeat: Checking for new employees...")
         schedule.run_pending()
-        time.sleep(1)
+        time.sleep(10)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()

@@ -27,14 +27,14 @@ def sync_data():
         rows = session.execute(f"SELECT name, email, designation FROM {TABLE_NAME}")
         count = 0
         for row in rows:
-            if not es.exists(index="employee-management", id=row.email):
+            if not es.exists(index="employee_index", id=row.email):
                 doc = {
                     "name": row.name,
                     "email_id": row.email,
                     "designation": row.designation,
                     "notified": False
                 }
-                es.index(index="employee-management", id=row.email, body=doc)
+                es.index(index="employee_index", id=row.email, body=doc)
                 count += 1
         if count > 0:
             print(f"[{time.ctime()}] Successfully synced {count} NEW records.")

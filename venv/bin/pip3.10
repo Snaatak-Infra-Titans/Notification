@@ -1,4 +1,4 @@
-#!/home/ubuntu/notification-worker/venv/bin/python3
+#!/home/mukesh/OT-Micro-Snatak-P18/notification-worker/venv/bin/python3
 # -*- coding: utf-8 -*-
 import re
 import sys
