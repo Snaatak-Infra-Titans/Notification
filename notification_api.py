@@ -37,13 +37,15 @@ def read_configuration():
 def send_mail(email_id):
     logger = get_logger()
     cfg = read_configuration()
+
     try:
         message = emails.html(
             html="<strong>Your salary slip is generated please check</strong>",
             subject="Salary Slip",
             mail_from=cfg.getProperty("smtp.from"),
         )
-        message.send(
+
+        response = message.send(
             to=email_id,
             smtp={
                 "host": cfg.getProperty("smtp.smtp_server"),
@@ -51,11 +53,17 @@ def send_mail(email_id):
                 "timeout": 5,
                 "user": cfg.getProperty("smtp.username"),
                 "password": cfg.getProperty("smtp.password"),
-                "tls": True,  
+                "tls": True,
             },
         )
+
+        print("RESPONSE TYPE:", type(response))
+        print("RESPONSE DICT:", vars(response))
+        print("SUCCESS:", getattr(response, "success", None))
+
         logger.info("Sent mail to %s", email_id)
         return True
+
     except Exception as e:
         logger.error("Mail fail for %s: %s", email_id, e)
         return False
