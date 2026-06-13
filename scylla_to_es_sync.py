@@ -3,46 +3,131 @@ from cassandra.cluster import Cluster
 from cassandra.auth import PlainTextAuthProvider
 from elasticsearch import Elasticsearch
 
-SCYLLA_HOST = '127.0.0.1'
-SCYLLA_USER = 'scylladb' 
-SCYLLA_PASS = 'password' 
-SCYLLA_KEYSPACE = 'employee_db'
-TABLE_NAME = 'employee_info'
-ES_HOST = "http://127.0.0.1:9200"
+# ==========================================
+# ScyllaDB Configuration
+# ==========================================
 
-auth_provider = PlainTextAuthProvider(username=SCYLLA_USER, password=SCYLLA_PASS)
-cluster = Cluster([SCYLLA_HOST], auth_provider=auth_provider)
+SCYLLA_HOST = '127.0.0.1'
+SCYLLA_USER = 'scylladb'
+SCYLLA_PASS = 'password'
+
+KEYSPACE = 'employee_db'
+
+EMPLOYEE_TABLE = 'employee_info'
+SALARY_TABLE = 'employee_salary'
+
+# ==========================================
+# Elasticsearch Configuration
+# ==========================================
+
+ES_HOST = "http://127.0.0.1:9200"
+ES_INDEX = "employee_index"
+
+# ==========================================
+# Cassandra Connection
+# ==========================================
+
+auth_provider = PlainTextAuthProvider(
+    username=SCYLLA_USER,
+    password=SCYLLA_PASS
+)
+
+cluster = Cluster(
+    [SCYLLA_HOST],
+    auth_provider=auth_provider
+)
 
 try:
-    session = cluster.connect(SCYLLA_KEYSPACE)
-    print(f"Connected to ScyllaDB keyspace: {SCYLLA_KEYSPACE}")
+    session = cluster.connect(KEYSPACE)
+    print(f"Connected to ScyllaDB keyspace: {KEYSPACE}")
 except Exception as e:
     print(f"CRITICAL: Could not connect to ScyllaDB: {e}")
     exit(1)
 
+# ==========================================
+# Elasticsearch Connection
+# ==========================================
+
 es = Elasticsearch([ES_HOST])
 
+# ==========================================
+# Sync Function
+# ==========================================
+
 def sync_data():
+
     try:
-        rows = session.execute(f"SELECT name, email, designation FROM {TABLE_NAME}")
-        count = 0
-        for row in rows:
-            if not es.exists(index="employee_index", id=row.email):
-                doc = {
-                    "name": row.name,
-                    "email_id": row.email,
-                    "designation": row.designation,
-                    "notified": False
-                }
-                es.index(index="employee_index", id=row.email, body=doc)
-                count += 1
-        if count > 0:
-            print(f"[{time.ctime()}] Successfully synced {count} NEW records.")
+
+        # Fetch salary records
+        salary_rows = session.execute(
+            f"SELECT id, name, salary, process_date, status FROM {SALARY_TABLE}"
+        )
+
+        synced_count = 0
+
+        for salary in salary_rows:
+
+            employee_id = salary.id
+
+            # Fetch employee info using ID
+            employee_query = session.execute(
+                f"SELECT id, email, designation, name FROM {EMPLOYEE_TABLE} WHERE id = %s",
+                [employee_id]
+            )
+
+            employee = employee_query.one()
+
+            if not employee:
+                print(f"Employee info not found for ID: {employee_id}")
+                continue
+
+            email = employee.email
+
+            # Skip already indexed employees
+            if es.exists(index=ES_INDEX, id=email):
+                continue
+
+            # Elasticsearch document
+            doc = {
+                "employee_id": employee_id,
+                "name": employee.name,
+                "email_id": employee.email,
+                "designation": employee.designation,
+                "salary": salary.salary,
+                "process_date": str(salary.process_date),
+                "status": salary.status,
+                "notified": False
+            }
+
+            # Index document
+            es.index(
+                index=ES_INDEX,
+                id=email,
+                body=doc
+            )
+
+            synced_count += 1
+
+            print(f"Indexed Employee: {employee.name}")
+
+        if synced_count > 0:
+            print(f"[{time.ctime()}] Successfully synced {synced_count} new records.")
+        else:
+            print(f"[{time.ctime()}] No new records to sync.")
+
     except Exception as e:
         print(f"[{time.ctime()}] Sync Error: {e}")
 
+# ==========================================
+# Main Loop
+# ==========================================
+
 if __name__ == "__main__":
-    print(f"Smart Bridge Active...")
+
+    print("ScyllaDB → Elasticsearch Sync Service Started")
+
     while True:
+
         sync_data()
+
         time.sleep(30)
