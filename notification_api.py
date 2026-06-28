@@ -1,38 +1,62 @@
 #!/usr/bin/python3
-#pylint: disable = invalid-name, broad-except
+# pylint: disable=invalid-name,broad-except
+
 """
-A notification application which runs on scheduled basis and send the information to users.
-Author:- Opstree Solutions
+Notification API
+Author: Opstree Solutions
 """
 
-import argparse
 import os
 import sys
 import logging
-import time
+
 import emails
 import config_with_yaml as config
+
 from elasticsearch import Elasticsearch
-import schedule
+from flask import Flask, request, jsonify
 
 CONFIG_FILE = os.environ.get("CONFIG_FILE")
-FORMATTER = logging.Formatter("%(asctime)s — %(name)s — %(levelname)s — %(message)s")
+
+app = Flask(__name__)
+
+FORMATTER = logging.Formatter(
+    "%(asctime)s — %(name)s — %(levelname)s — %(message)s"
+)
+
 
 def get_logger():
     logger = logging.getLogger("notification-service")
     logger.setLevel(logging.DEBUG)
+
     if not logger.handlers:
         console_handler = logging.StreamHandler(sys.stdout)
         console_handler.setFormatter(FORMATTER)
         logger.addHandler(console_handler)
+
     return logger
+
 
 def read_configuration():
     logger = get_logger()
+
     try:
         return config.load(CONFIG_FILE)
     except Exception as e:
-        logger.error("Config error: %s", e)
+        logger.error("Configuration Error : %s", e)
+        return None
+
+
+def get_es_client():
+    cfg = read_configuration()
+
+    return Elasticsearch(
+        [
+            f"http://{cfg.getProperty('elasticsearch.host')}:"
+            f"{cfg.getProperty('elasticsearch.port')}"
+        ]
+    )
+
 
 def send_mail(email_id):
     logger = get_logger()
@@ -40,7 +64,7 @@ def send_mail(email_id):
 
     try:
         message = emails.html(
-            html="<strong>Your salary slip is generated please check</strong>",
+            html="<strong>Your salary slip is generated. Please check.</strong>",
             subject="Salary Slip",
             mail_from=cfg.getProperty("smtp.from"),
         )
@@ -57,87 +81,169 @@ def send_mail(email_id):
             },
         )
 
-        print("RESPONSE TYPE:", type(response))
-        print("RESPONSE DICT:", vars(response))
-        print("SUCCESS:", getattr(response, "success", None))
+        logger.info("Mail sent to %s", email_id)
+        logger.debug("SMTP Response : %s", vars(response))
 
-        logger.info("Sent mail to %s", email_id)
         return True
 
     except Exception as e:
-        logger.error("Mail fail for %s: %s", email_id, e)
+        logger.error("Failed sending mail to %s : %s", email_id, e)
         return False
 
+
 def send_mail_to_all_users():
+
     logger = get_logger()
-    cfg = read_configuration()
+
     try:
-        es = Elasticsearch([f"http://{cfg.getProperty('elasticsearch.host')}:{cfg.getProperty('elasticsearch.port')}"])
+
+        es = get_es_client()
+
         result = es.search(
-            index="employee_index", 
+            index="employee_index",
             body={
                 "query": {
                     "bool": {
                         "must_not": [
-                            {"term": {"notified": True}}
+                            {
+                                "term": {
+                                    "notified": True
+                                }
+                            }
                         ]
                     }
                 }
             }
         )
-        
+
         hits = result["hits"]["hits"]
+
         if not hits:
-            logger.info("No new employees to notify.")
-            return
+            logger.info("No employees pending notification.")
+
+            return {
+                "message": "No employees pending notification."
+            }
+
+        count = 0
 
         for data in hits:
 
             source = data["_source"]
 
-
-
             if "email_id" not in source:
 
-                logger.warning("Skipping document without email_id: %s", data["_id"])
+                logger.warning(
+                    "Skipping document %s. Email not found.",
+                    data["_id"],
+                )
 
                 continue
-
-
 
             email = source["email_id"]
 
             doc_id = data["_id"]
 
+            if send_mail(email):
 
-
-            success = send_mail(email)
-            
-            # Tag the user in Elasticsearch so they aren't emailed again
-            if success:
                 es.update(
                     index="employee_index",
                     id=doc_id,
-                    body={"doc": {"notified": True}}
+                    body={
+                        "doc": {
+                            "notified": True
+                        }
+                    },
                 )
-                logger.info("Marked %s as notified.", email)
+
+                count += 1
+
+        return {
+            "message": f"{count} notification(s) sent."
+        }
 
     except Exception as e:
-        logger.error("ES Query Error: %s", e)
 
-def schedule_operation():
-    logger = get_logger()
-    logger.info("Notification scheduler started")
-    schedule.every(1).minutes.do(send_mail_to_all_users)
-    while True:
-        schedule.run_pending()
-        time.sleep(10)
+        logger.error("Elasticsearch Error : %s", e)
+
+        return {
+            "error": str(e)
+        }
+
+
+@app.route("/api/v1/notification/health", methods=["GET"])
+def health():
+
+    return jsonify(
+        {
+            "status": "UP",
+            "service": "Notification API"
+        }
+    )
+
+
+@app.route("/api/v1/notification/send", methods=["POST"])
+def send_notification():
+
+    data = request.get_json()
+
+    if not data:
+
+        return (
+            jsonify(
+                {
+                    "message": "Invalid JSON body"
+                }
+            ),
+            400,
+        )
+
+    email = data.get("email")
+
+    if not email:
+
+        return (
+            jsonify(
+                {
+                    "message": "email field is required"
+                }
+            ),
+            400,
+        )
+
+    if send_mail(email):
+
+        return (
+            jsonify(
+                {
+                    "message": "Mail sent successfully."
+                }
+            ),
+            200,
+        )
+
+    return (
+        jsonify(
+            {
+                "message": "Mail sending failed."
+            }
+        ),
+        500,
+    )
+
+
+@app.route("/api/v1/notification/send/all", methods=["POST"])
+def notify_all():
+
+    result = send_mail_to_all_users()
+
+    return jsonify(result)
+
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("-m", "--mode", default="scheduled")
-    args = parser.parse_args()
-    if args.mode == "scheduled":
-        schedule_operation()
-    else:
-        send_mail_to_all_users()
+
+    app.run(
+        host="0.0.0.0",
+        port=8083,
+        debug=False,
+    )
