@@ -15,7 +15,9 @@ import sys
 import re
 
 import config_with_yaml as config
-import emails
+import smtplib
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
 from elasticsearch import Elasticsearch
 from flask import Flask, jsonify, request
 from flasgger import Swagger
@@ -128,7 +130,7 @@ def send_mail(
     body="<strong>Your salary slip is generated. Please check.</strong>",
 ):
     """
-    Send an email using the configured SMTP server.
+    Send email using Python's smtplib.
 
     Returns:
         bool: True if email sent successfully.
@@ -136,46 +138,40 @@ def send_mail(
 
     try:
 
-        message = emails.html(
-            html=body,
-            subject=subject,
-            mail_from=cfg.getProperty("smtp.from"),
+        smtp_host = cfg.getProperty("smtp.smtp_server")
+        smtp_port = int(cfg.getProperty("smtp.smtp_port"))
+        smtp_user = cfg.getProperty("smtp.username")
+        smtp_pass = cfg.getProperty("smtp.password")
+        mail_from = cfg.getProperty("smtp.from")
+
+        msg = MIMEMultipart("alternative")
+        msg["Subject"] = subject
+        msg["From"] = mail_from
+        msg["To"] = email_id
+
+        msg.attach(MIMEText(body, "html"))
+
+        server = smtplib.SMTP(smtp_host, smtp_port)
+        server.starttls()
+        server.login(smtp_user, smtp_pass)
+
+        server.sendmail(
+            mail_from,
+            [email_id],
+            msg.as_string(),
         )
 
-        response = message.send(
-            to=email_id,
-            smtp={
-                "host": cfg.getProperty("smtp.smtp_server"),
-                "port": int(cfg.getProperty("smtp.smtp_port")),
-                "timeout": 10,
-                "user": cfg.getProperty("smtp.username"),
-                "password": cfg.getProperty("smtp.password"),
-                "tls": True,
-            },
-        )
+        server.quit()
 
-        print("=" * 80)
-        print("Response Object :", response)
-        print("Response Dict   :", vars(response))
-        print("Status Code     :", getattr(response, "status_code", None))
-        print("Success         :", getattr(response, "success", None))
-        print("Error           :", getattr(response, "error", None))
-        print("=" * 80)
+        logger.info("Email sent successfully to %s", email_id)
 
-        logger.info("SMTP Response : %s", vars(response))
+        return True
 
-        success = getattr(response, "success", None)
-        status = getattr(response, "status_code", None)
-        
-        if success is True or status == 250:
-            logger.info("Email sent successfully to %s", email_id)
-            return True
-        
-        logger.error("SMTP Response indicates failure: %s", vars(response))
-        return False
-       
     except Exception:
-        logger.exception("Failed to send email to %s", email_id)
+        logger.exception(
+            "Failed to send email to %s",
+            email_id,
+        )
         return False
 
 @app.route("/api/v1/notification/health", methods=["GET"])
