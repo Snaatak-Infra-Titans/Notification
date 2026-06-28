@@ -130,16 +130,12 @@ def send_mail(
     """
     Send an email using the configured SMTP server.
 
-    Args:
-        email_id (str): Recipient email address.
-        subject (str): Email subject.
-        body (str): HTML email body.
-
     Returns:
-        bool: True if email sent successfully, False otherwise.
+        bool: True if email sent successfully.
     """
 
     try:
+
         message = emails.html(
             html=body,
             subject=subject,
@@ -158,16 +154,28 @@ def send_mail(
             },
         )
 
-        logger.info("Email sent successfully to %s", email_id)
-        logger.debug("SMTP Response: %s", vars(response))
+        print("=" * 80)
+        print("Response Object :", response)
+        print("Response Dict   :", vars(response))
+        print("Status Code     :", getattr(response, "status_code", None))
+        print("Success         :", getattr(response, "success", None))
+        print("Error           :", getattr(response, "error", None))
+        print("=" * 80)
 
-        return True
+        logger.info("SMTP Response : %s", vars(response))
 
+        success = getattr(response, "success", None)
+        status = getattr(response, "status_code", None)
+        
+        if success is True or status == 250:
+            logger.info("Email sent successfully to %s", email_id)
+            return True
+        
+        logger.error("SMTP Response indicates failure: %s", vars(response))
+        return False
+       
     except Exception:
-        logger.exception(
-            "Failed to send email to %s",
-            email_id,
-        )
+        logger.exception("Failed to send email to %s", email_id)
         return False
 
 @app.route("/api/v1/notification/health", methods=["GET"])
