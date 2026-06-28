@@ -1,4 +1,11 @@
+Flask==2.3.2
+gunicorn==22.0.0
+
 emails==0.6
 elasticsearch==7.8.0
 config-with-yaml==0.1.0
-schedule==0.6.0
+
+prometheus-flask-exporter==0.23.0
+
+pytest==8.2.2
+pytest-cov==5.0.0
