@@ -5,6 +5,7 @@ emails==0.6
 elasticsearch==7.8.0
 config-with-yaml==0.1.0
 
+flasgger==0.9.7b2
 prometheus-flask-exporter==0.23.0
 
 pytest==8.2.2
