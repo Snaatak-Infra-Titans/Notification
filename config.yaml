@@ -4,9 +4,9 @@ server:
   port: 8085
 
 smtp:
-  from: "478mkharb@gmail.com"
-  username: "478mkharb@gmail.com"
-  password: "qrgkvovwcihdsopv"
+  from: "jenkinsotms@gmail.com"
+  username: "jenkinsotms@gmail.com"
+  password: "zvdftllukvincrgj"
   smtp_server: "smtp.gmail.com"
   smtp_port: 587
 
