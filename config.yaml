@@ -1,13 +1,18 @@
 ---
+server:
+  host: "0.0.0.0"
+  port: 8085
+
 smtp:
-  from: "478mkharb@gmail.com"
-  username: "478mkharb@gmail.com"
-  password: "qrgkvovwcihdsopv"
+  from: "jenkinsotms@gmail.com"
+  username: "jenkinsotms@gmail.com"
+  password: "zvdftllukvincrgj"
   smtp_server: "smtp.gmail.com"
-  smtp_port: "587"
+  smtp_port: 587
 
 elasticsearch:
   username: ""
   password: ""
   host: "127.0.0.1"
   port: 9200
+  index: "employee_index"

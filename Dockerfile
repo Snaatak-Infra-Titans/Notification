@@ -1,13 +1,31 @@
-FROM python:3.6-alpine
+FROM python:3.11-alpine
 
-MAINTAINER OpsTree Solutions
+LABEL maintainer="OpsTree Solutions"
 
-COPY ./ /app
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
 
 WORKDIR /app
 
-RUN apk add --update --no-cache g++ gcc libxslt-dev bash
+COPY requirements.txt .
 
-RUN pip3 install -r requirements.txt
+RUN apk add --no-cache \
+        bash \
+        gcc \
+        g++ \
+        musl-dev \
+        libffi-dev \
+        openssl-dev \
+        cargo
+
+RUN pip install --no-cache-dir --upgrade pip
+
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY . .
+
+RUN chmod +x entrypoint.sh
+
+EXPOSE 8085
 
 ENTRYPOINT ["./entrypoint.sh"]

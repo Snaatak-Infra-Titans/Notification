@@ -1,143 +1,545 @@
-#!/usr/bin/python3
-#pylint: disable = invalid-name, broad-except
+#!/usr/bin/env python3
 """
-A notification application which runs on scheduled basis and send the information to users.
-Author:- Opstree Solutions
+Notification API for OT-Microservices.
+
+This microservice provides REST APIs for sending notifications
+through SMTP and retrieving employee notification details from
+Elasticsearch.
+
+Author: Opstree Solutions
 """
 
-import argparse
+import logging
 import os
 import sys
-import logging
-import time
-import emails
-import config_with_yaml as config
-from elasticsearch import Elasticsearch
-import schedule
+import re
 
-CONFIG_FILE = os.environ.get("CONFIG_FILE")
-FORMATTER = logging.Formatter("%(asctime)s — %(name)s — %(levelname)s — %(message)s")
+import config_with_yaml as config
+import smtplib
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from elasticsearch import Elasticsearch
+from flask import Flask, jsonify, request
+from flasgger import Swagger
+from prometheus_flask_exporter import PrometheusMetrics
+
+API_VERSION = "1.0"
+CONFIG_FILE = os.environ.get("CONFIG_FILE", "config.yaml")
+
+app = Flask(__name__)
+
+swagger_template = {
+    "swagger": "2.0",
+    "info": {
+        "title": "Notification API",
+        "description": "REST API for sending employee notifications",
+        "version": API_VERSION,
+        "contact": {
+            "name": "OpsTree Solutions"
+        }
+    },
+    "basePath": "/api/v1/notification"
+}
+
+Swagger(app, template=swagger_template)
+
+PrometheusMetrics(app)
+
+FORMATTER = logging.Formatter(
+    "%(asctime)s %(levelname)s %(name)s %(message)s"
+)
+
 
 def get_logger():
-    logger = logging.getLogger("notification-service")
-    logger.setLevel(logging.DEBUG)
+    """
+    Configure application logger.
+    """
+    logger = logging.getLogger("notification-api")
+    logger.setLevel(logging.INFO)
+
     if not logger.handlers:
         console_handler = logging.StreamHandler(sys.stdout)
         console_handler.setFormatter(FORMATTER)
         logger.addHandler(console_handler)
+
     return logger
 
+
+logger = get_logger()
+
+
 def read_configuration():
-    logger = get_logger()
+    """
+    Load configuration from config.yaml.
+    """
     try:
-        return config.load(CONFIG_FILE)
-    except Exception as e:
-        logger.error("Config error: %s", e)
+        cfg = config.load(CONFIG_FILE)
 
-def send_mail(email_id):
-    logger = get_logger()
-    cfg = read_configuration()
+        logger.info("Configuration loaded successfully.")
+
+        return cfg
+
+    except Exception as exc:
+        logger.exception("Unable to load configuration.")
+
+        raise RuntimeError(
+            "Configuration loading failed."
+        ) from exc
+
+
+cfg = read_configuration()
+
+def es_client():
+    """
+    Create and return an Elasticsearch client.
+    """
+    try:
+        host = cfg.getProperty("elasticsearch.host")
+        port = cfg.getProperty("elasticsearch.port")
+        username = cfg.getProperty("elasticsearch.username")
+        password = cfg.getProperty("elasticsearch.password")
+
+        logger.info("Connecting to Elasticsearch at %s:%s", host, port)
+
+        if username and password:
+            client = Elasticsearch(
+                hosts=[f"http://{host}:{port}"],
+                http_auth=(username, password),
+            )
+        else:
+            client = Elasticsearch(
+                hosts=[f"http://{host}:{port}"],
+            )
+
+        if not client.ping():
+            raise ConnectionError("Unable to connect to Elasticsearch")
+
+        logger.info("Successfully connected to Elasticsearch.")
+
+        return client
+
+    except Exception as exc:
+        logger.exception("Failed to connect to Elasticsearch.")
+        raise RuntimeError(
+            "Elasticsearch connection failed."
+        ) from exc
+
+def send_mail(
+    email_id,
+    subject="Salary Slip",
+    body="<strong>Your salary slip is generated. Please check.</strong>",
+):
+    """
+    Send email using Python's smtplib.
+
+    Returns:
+        bool: True if email sent successfully.
+    """
 
     try:
-        message = emails.html(
-            html="<strong>Your salary slip is generated please check</strong>",
-            subject="Salary Slip",
-            mail_from=cfg.getProperty("smtp.from"),
+
+        smtp_host = cfg.getProperty("smtp.smtp_server")
+        smtp_port = int(cfg.getProperty("smtp.smtp_port"))
+        smtp_user = cfg.getProperty("smtp.username")
+        smtp_pass = cfg.getProperty("smtp.password")
+        mail_from = cfg.getProperty("smtp.from")
+
+        msg = MIMEMultipart("alternative")
+        msg["Subject"] = subject
+        msg["From"] = mail_from
+        msg["To"] = email_id
+
+        msg.attach(MIMEText(body, "html"))
+
+        server = smtplib.SMTP(smtp_host, smtp_port)
+        server.starttls()
+        server.login(smtp_user, smtp_pass)
+
+        server.sendmail(
+            mail_from,
+            [email_id],
+            msg.as_string(),
         )
 
-        response = message.send(
-            to=email_id,
-            smtp={
-                "host": cfg.getProperty("smtp.smtp_server"),
-                "port": cfg.getProperty("smtp.smtp_port"),
-                "timeout": 5,
-                "user": cfg.getProperty("smtp.username"),
-                "password": cfg.getProperty("smtp.password"),
-                "tls": True,
-            },
-        )
+        server.quit()
 
-        print("RESPONSE TYPE:", type(response))
-        print("RESPONSE DICT:", vars(response))
-        print("SUCCESS:", getattr(response, "success", None))
+        logger.info("Email sent successfully to %s", email_id)
 
-        logger.info("Sent mail to %s", email_id)
         return True
 
-    except Exception as e:
-        logger.error("Mail fail for %s: %s", email_id, e)
+    except Exception:
+        logger.exception(
+            "Failed to send email to %s",
+            email_id,
+        )
         return False
 
-def send_mail_to_all_users():
-    logger = get_logger()
-    cfg = read_configuration()
+@app.route("/api/v1/notification/health", methods=["GET"])
+def health():
+    """
+    Health Check API
+    ---
+    tags:
+      - Health
+    summary: Notification API Health
+    description: Returns basic health status of the Notification API.
+    responses:
+      200:
+        description: Notification API is healthy
+        schema:
+          type: object
+          properties:
+            status:
+              type: string
+              example: UP
+            service:
+              type: string
+              example: notification-api
+            version:
+              type: string
+              example: "1.0"
+    """
+
+    logger.info("Health endpoint invoked.")
+
+    return jsonify(
+        {
+            "status": "UP",
+            "service": "notification-api",
+            "version": API_VERSION
+        }
+    ), 200
+
+
+@app.route("/api/v1/notification/health/detail", methods=["GET"])
+def detailed_health():
+    """
+    Detailed Health Check API
+    ---
+    tags:
+      - Health
+    summary: Detailed Notification API Health
+    description: Checks Elasticsearch connectivity and SMTP configuration.
+    responses:
+      200:
+        description: Health information
+    """
+
+    response = {
+        "service": "notification-api",
+        "status": "UP",
+        "version": API_VERSION,
+        "elasticsearch": "DOWN",
+        "smtp": "DOWN"
+    }
+
     try:
-        es = Elasticsearch([f"http://{cfg.getProperty('elasticsearch.host')}:{cfg.getProperty('elasticsearch.port')}"])
+        es = es_client()
+
+        if es.ping():
+            response["elasticsearch"] = "UP"
+
+    except Exception:
+        logger.exception("Elasticsearch health check failed.")
+
+    try:
+        if (
+            cfg.getProperty("smtp.smtp_server")
+            and cfg.getProperty("smtp.username")
+        ):
+            response["smtp"] = "UP"
+
+    except Exception:
+        logger.exception("SMTP health check failed.")
+
+    logger.info("Detailed health endpoint invoked.")
+
+    return jsonify(response), 200
+
+@app.route("/api/v1/notification/send", methods=["POST"])
+def send_notification():
+    """
+    Send Notification
+    ---
+    tags:
+      - Notification
+    summary: Send notification to a single employee
+    description: Sends an email notification to the specified employee.
+
+    consumes:
+      - application/json
+
+    produces:
+      - application/json
+
+    parameters:
+      - in: body
+        name: body
+        required: true
+        schema:
+          type: object
+          required:
+            - email
+          properties:
+            email:
+              type: string
+              example: "john@example.com"
+            subject:
+              type: string
+              example: "Salary Slip"
+            message:
+              type: string
+              example: "<strong>Your salary slip is generated.</strong>"
+
+    responses:
+      200:
+        description: Email sent successfully
+
+      400:
+        description: Invalid request
+
+      500:
+        description: Internal server error
+    """
+
+    logger.info("Received request to send notification.")
+
+    try:
+        data = request.get_json()
+
+        if not data:
+            return jsonify({
+                "status": "error",
+                "message": "Request body is required."
+            }), 400
+
+        email = data.get("email")
+
+        if not email:
+            return jsonify({
+                "status": "error",
+                "message": "email field is required."
+            }), 400
+        
+        email_pattern = r"^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$"
+        
+        if not re.match(email_pattern, email):
+            return jsonify({
+                "status": "error",
+                "message": "Invalid email address."
+            }), 400
+        
+        subject = data.get(
+            "subject",
+            "Salary Slip"
+        )
+
+        body = data.get(
+            "message",
+            "<strong>Your salary slip is generated. Please check.</strong>"
+        )
+
+        success = send_mail(
+            email,
+            subject,
+            body
+        )
+
+        if success:
+
+            logger.info(
+                "Notification sent successfully to %s",
+                email
+            )
+
+            return jsonify({
+                "status": "success",
+                "message": "Notification sent successfully."
+            }), 200
+
+        logger.error(
+            "Unable to send notification to %s",
+            email
+        )
+
+        return jsonify({
+            "status": "error",
+            "message": "Failed to send notification."
+        }), 500
+
+    except Exception:
+
+        logger.exception(
+            "Unexpected error while sending notification."
+        )
+    
+        return jsonify({
+            "status": "error",
+            "message": "Internal Server Error"
+        }), 500
+
+@app.route("/api/v1/notification/send/all", methods=["POST"])
+def send_all_notifications():
+    """
+    Send Notifications to All Employees
+    ---
+    tags:
+      - Notification
+
+    summary: Send notifications to all pending employees
+
+    description: |
+      Fetches all employees from Elasticsearch whose
+      `notified` field is false, sends an email to each,
+      and updates Elasticsearch to prevent duplicate
+      notifications.
+
+    produces:
+      - application/json
+
+    responses:
+      200:
+        description: Notifications processed successfully
+
+      500:
+        description: Internal server error
+    """
+
+    logger.info("Bulk notification request received.")
+
+    try:
+
+        es = es_client()
+
         result = es.search(
-            index="employee_index", 
+            index=cfg.getProperty("elasticsearch.index"),
             body={
                 "query": {
                     "bool": {
                         "must_not": [
-                            {"term": {"notified": True}}
+                            {
+                                "term": {
+                                    "notified": True
+                                }
+                            }
                         ]
                     }
                 }
-            }
+            },
         )
-        
+
         hits = result["hits"]["hits"]
+
         if not hits:
-            logger.info("No new employees to notify.")
-            return
 
-        for data in hits:
+            logger.info("No employees pending notification.")
 
-            source = data["_source"]
+            return jsonify({
+                "status": "success",
+                "message": "No pending notifications found.",
+                "notifications_sent": 0
+            }), 200
 
+        total_records = len(hits)
+        success_count = 0
+        failed_count = 0
 
+        for hit in hits:
 
-            if "email_id" not in source:
+            source = hit["_source"]
 
-                logger.warning("Skipping document without email_id: %s", data["_id"])
+            email = source.get("email_id")
+
+            if not email:
+
+                logger.warning(
+                    "Skipping document %s because email_id is missing.",
+                    hit["_id"]
+                )
+
+                failed_count += 1
 
                 continue
 
+            if send_mail(email):
 
-
-            email = source["email_id"]
-
-            doc_id = data["_id"]
-
-
-
-            success = send_mail(email)
-            
-            # Tag the user in Elasticsearch so they aren't emailed again
-            if success:
                 es.update(
-                    index="employee_index",
-                    id=doc_id,
-                    body={"doc": {"notified": True}}
+                    index=cfg.getProperty("elasticsearch.index"),
+                    id=hit["_id"],
+                    body={
+                        "doc": {
+                            "notified": True
+                        }
+                    },
                 )
-                logger.info("Marked %s as notified.", email)
 
-    except Exception as e:
-        logger.error("ES Query Error: %s", e)
+                logger.info(
+                    "Notification sent successfully to %s",
+                    email
+                )
 
-def schedule_operation():
-    logger = get_logger()
-    logger.info("Notification scheduler started")
-    schedule.every(1).minutes.do(send_mail_to_all_users)
-    while True:
-        schedule.run_pending()
-        time.sleep(10)
+                success_count += 1
 
+            else:
+
+                logger.error(
+                    "Failed to send notification to %s",
+                    email
+                )
+
+                failed_count += 1
+
+        logger.info(
+            "Bulk notification completed. Success=%s Failed=%s",
+            success_count,
+            failed_count
+        )
+
+        return jsonify({
+
+            "status": "success",
+
+            "total_records": total_records,
+
+            "notifications_sent": success_count,
+
+            "failed_notifications": failed_count
+
+        }), 200
+
+    except Exception:
+
+        logger.exception(
+            "Bulk notification processing failed."
+        )
+    
+        return jsonify({
+            "status": "error",
+            "message": "Internal Server Error"
+        }), 500
+   
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("-m", "--mode", default="scheduled")
-    args = parser.parse_args()
-    if args.mode == "scheduled":
-        schedule_operation()
-    else:
-        send_mail_to_all_users()
+
+    try:
+
+        host = cfg.getProperty("server.host")
+        port = int(cfg.getProperty("server.port"))
+
+        logger.info("=" * 70)
+        logger.info("Notification API Started Successfully")
+        logger.info("Environment : %s", os.getenv("ENV", "local"))
+        logger.info("Configuration: %s", CONFIG_FILE)
+        logger.info("Port        : %s", port)
+        logger.info("Swagger UI  : http://%s:%s/apidocs/", host, port)
+        logger.info("Metrics     : http://%s:%s/metrics", host, port)
+        logger.info("=" * 70)
+        
+        app.run(
+            host=host,
+            port=port,
+            debug=False,
+        )
+
+    except Exception:
+        logger.exception("Notification API failed to start.")
+        raise
