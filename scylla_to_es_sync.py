@@ -1,4 +1,5 @@
 import time
+import requests
 from cassandra.cluster import Cluster
 from cassandra.auth import PlainTextAuthProvider
 from elasticsearch import Elasticsearch
@@ -103,7 +104,8 @@ def sync_data():
             es.index(
                 index=ES_INDEX,
                 id=email,
-                body=doc
+                body=doc,
+                refresh="wait_for"
             )
 
             synced_count += 1
@@ -112,6 +114,16 @@ def sync_data():
 
         if synced_count > 0:
             print(f"[{time.ctime()}] Successfully synced {synced_count} new records.")
+
+            try:
+                response = requests.post(
+                    "http://127.0.0.1:8085/api/v1/notification/send/all",
+                    timeout=15
+                )
+                print(f"Notification API Response: {response.status_code}")
+            except Exception as exc:
+                print(f"Failed to trigger Notification API: {exc}")
+
         else:
             print(f"[{time.ctime()}] No new records to sync.")
 
@@ -130,4 +142,4 @@ if __name__ == "__main__":
 
         sync_data()
 
-        time.sleep(30)
+        time.sleep(2)
