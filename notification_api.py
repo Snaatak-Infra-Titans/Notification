@@ -429,6 +429,8 @@ def send_all_notifications():
         )
 
         hits = result["hits"]["hits"]
+        logger.info("ES Result: %s", result)
+        logger.info("ES Hits Count: %s", len(hits))
 
         if not hits:
 
