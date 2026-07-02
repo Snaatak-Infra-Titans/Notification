@@ -291,7 +291,7 @@ Reset notification status every month
 Trigger notifications
 
 ```cron
-5 0 1 * * cd /home/ubuntu/OT-Micro-Snatak-P18/Notification && /home/ubuntu/OT-Micro-Snatak-P18/Notification/venv/bin/python trigger_notifications.py
+5 0 1 * * curl -X POST http://127.0.0.1:8085/api/v1/notification/send/all
 ```
 
 ---
