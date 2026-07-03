@@ -140,9 +140,20 @@ def send_mail(
 
         smtp_host = cfg.getProperty("smtp.smtp_server")
         smtp_port = int(cfg.getProperty("smtp.smtp_port"))
-        smtp_user = cfg.getProperty("smtp.username")
-        smtp_pass = cfg.getProperty("smtp.password")
-        mail_from = cfg.getProperty("smtp.from")
+        smtp_user = os.getenv(
+            "SMTP_USERNAME",
+            cfg.getProperty("smtp.username")
+        )
+        
+        smtp_pass = os.getenv(
+            "SMTP_PASSWORD",
+            cfg.getProperty("smtp.password")
+        )
+        
+        mail_from = os.getenv(
+            "SMTP_FROM",
+            cfg.getProperty("smtp.from")
+        )
 
         msg = MIMEMultipart("alternative")
         msg["Subject"] = subject
