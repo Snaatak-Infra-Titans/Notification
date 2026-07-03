@@ -4,10 +4,10 @@ server:
   port: 8085
 
 smtp:
-  from: "jenkinsotms@gmail.com"
-  username: "jenkinsotms@gmail.com"
-  password: "zvdftllukvincrgj"
-  smtp_server: "smtp.gmail.com"
+  from: ${SMTP_FROM}
+  username: ${SMTP_USERNAME}
+  password: ${SMTP_PASSWORD}
+  smtp_server: smtp.gmail.com
   smtp_port: 587
 
 elasticsearch:
