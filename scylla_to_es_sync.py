@@ -8,7 +8,7 @@ from elasticsearch import Elasticsearch
 # ScyllaDB Configuration
 # ==========================================
 
-SCYLLA_HOST = '127.0.0.1'
+SCYLLA_HOST = 'scylladb.otms.internal'
 SCYLLA_USER = 'scylladb'
 SCYLLA_PASS = 'password'
 
