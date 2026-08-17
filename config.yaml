@@ -15,4 +15,10 @@ elasticsearch:
   password: ${ELASTIC_PASSWORD:}
   host: ${ELASTIC_HOST:localhost}
   port: ${ELASTIC_PORT:9200}
-  index: ${ELASTIC_INDEX:salary_records}
+  index: ${ELASTIC_INDEX:employee_index}
+scylla:
+  host: ${SCYLLA_HOST:otms.scylladb.internal}
+  port: ${SCYLLA_PORT:9042}
+  username: ${SCYLLA_USERNAME:scylladb}
+  password: ${SCYLLA_PASSWORD:password}
+  keyspace: ${SCYLLA_KEYSPACE:employee_db}

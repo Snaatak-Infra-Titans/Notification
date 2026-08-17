@@ -5,6 +5,7 @@ set -Eeuo pipefail
 echo "Stopping Notification services..."
 
 sudo systemctl stop notification-api || true
+sudo systemctl stop notification-sync || true
 
 echo "Cleaning Elasticsearch indexes..."
 
