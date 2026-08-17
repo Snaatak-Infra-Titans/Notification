@@ -1,340 +1,116 @@
 # Notification API
 
-The Notification API is responsible for sending salary notification emails to employees. It fetches employee records from Elasticsearch, sends emails using SMTP, and updates the notification status to avoid duplicate emails.
+The Notification API sends salary notification emails for pending records that are already present in Elasticsearch. It does **not** connect to ScyllaDB and does **not** synchronize ScyllaDB data into Elasticsearch.
 
----
+## Features
 
-# Features
-
-- Send email to a single employee
-- Send emails to all pending employees
-- Health check endpoints
+- Send an email to a single employee
+- Send emails for all pending Elasticsearch records
+- Health and detailed health endpoints
 - Swagger API documentation
 - Prometheus metrics
 - Elasticsearch integration
-- ScyllaDB integration and ScyllaDB → Elasticsearch synchronization
 - SMTP email support
+- OpenTelemetry tracing
+- Structured application logging
 
----
+## Architecture
 
-# Prerequisites
-
-- Python 3.10+
-- Elasticsearch
-- SMTP Account (Gmail/App Password)
-- Virtual Environment
-
----
-
-# Project Structure
-
+```text
+Salary API / upstream producer
+            |
+            v
+     Elasticsearch
+     (salary_records)
+            |
+            | notified=false
+            v
+    Notification API
+            |
+            v
+       SMTP Server
+            |
+            v
+      Employee Email
+            |
+            v
+     Elasticsearch
+       notified=true
 ```
+
+## Project Structure
+
+```text
 Notification/
 ├── notification_api.py
-├── sync_service.py
+├── config.yaml
+├── entrypoint.sh
+├── requirements.txt
 ├── reset_notification_status.py
 ├── trigger_notifications.py
-├── config.yaml
-├── requirements.txt
-├── venv/
+├── cleanup.sh
+├── middleware/
+├── telemetry/
+├── utils/
+└── test_smoke.py
 ```
 
----
+There is intentionally no `sync_service.py` or `sync_worker.py`.
 
-# Installation
-
-## Create Virtual Environment
-
-```bash
-python3 -m venv venv
-```
-
-Activate
-
-```bash
-source venv/bin/activate
-```
-
-Install dependencies
-
-```bash
-pip install -r requirements.txt
-```
-
----
-
-# Configuration
-
-Edit `config.yaml`
+## Configuration
 
 ```yaml
-smtp:
-  smtp_server: smtp.gmail.com
-  smtp_port: 587
-  username: your-email@gmail.com
-  password: your-app-password
-  from: your-email@gmail.com
-
 elasticsearch:
-  host: 127.0.0.1
+  host: localhost
   port: 9200
-  index: employee_index
-
-scylla:
-  host: 127.0.0.1
-  port: 9042
-  username: scylladb
-  password: password
-  keyspace: employee_db
+  index: salary_records
 ```
 
----
+The application also supports environment variables:
 
-# Run Notification API
+```text
+SERVER_HOST
+SERVER_PORT
+ELASTIC_HOST
+ELASTIC_PORT
+ELASTIC_USERNAME
+ELASTIC_PASSWORD
+ELASTIC_INDEX
+SMTP_FROM
+SMTP_USERNAME
+SMTP_PASSWORD
+SMTP_SERVER
+SMTP_PORT
+```
+
+## Run with Gunicorn
 
 ```bash
 source venv/bin/activate
-
-python notification_api.py
+gunicorn --bind 0.0.0.0:8085 --workers 2 --threads 4 --timeout 60 notification_api:app
 ```
 
-API
-
-```
-http://localhost:8085
-```
-
----
-
-# Health Check
-
-```
-GET /api/v1/notification/health
-```
-
-Example
+## Health Checks
 
 ```bash
 curl http://localhost:8085/api/v1/notification/health
+curl http://localhost:8085/api/v1/notification/health/detail
 ```
 
----
+## Send Notification
 
-# Send Notification to One Employee
-
-```
-POST /api/v1/notification/send
-```
-
-Example
+Single employee:
 
 ```bash
 curl -X POST http://localhost:8085/api/v1/notification/send \
--H "Content-Type: application/json" \
--d '{
-  "email":"employee@example.com",
-  "subject":"Salary Slip",
-  "message":"Salary credited successfully."
-}'
+  -H 'Content-Type: application/json' \
+  -d '{"email":"employee@example.com"}'
 ```
 
----
-
-# Send Notifications to All Employees
-
-```
-POST /api/v1/notification/send/all
-```
-
-Example
+Process all pending Elasticsearch records:
 
 ```bash
 curl -X POST http://localhost:8085/api/v1/notification/send/all
 ```
 
-The API
-
-- Searches Elasticsearch
-- Finds employees where
-
-```
-notified = false
-```
-
-- Sends emails
-- Updates
-
-```
-notified = true
-```
-
-to prevent duplicate emails.
-
----
-
-# Synchronize ScyllaDB to Elasticsearch
-
-```
-POST /api/v1/notification/sync
-```
-
-Example:
-
-```bash
-curl -X POST http://localhost:8085/api/v1/notification/sync
-```
-
-The endpoint reads salary records from `employee_salary`, joins employee
-details from `employee_info`, and upserts them into the `employee_index`
-Elasticsearch index. Existing `notified` state is preserved.
-
-The `POST /api/v1/notification/send/all` endpoint performs this synchronization
-before processing pending notifications, so no separate sync process is needed.
-
----
-
-# Monthly Notification Workflow
-
-## Step 1
-
-Reset notification status
-
-```bash
-cd Notification
-
-source venv/bin/activate
-
-python reset_notification_status.py
-```
-
-This updates every employee
-
-```
-notified = false
-```
-
----
-
-## Step 2
-
-Trigger notifications
-
-```bash
-python trigger_notifications.py
-```
-
-or
-
-```bash
-curl -X POST http://localhost:8085/api/v1/notification/send/all
-```
-
-The Notification API sends salary emails and updates
-
-```
-notified = true
-```
-
----
-
-# ScyllaDB to Elasticsearch Sync
-
-ScyllaDB is the source of truth for employee and salary data. The
-Notification API now owns the ScyllaDB → Elasticsearch synchronization.
-There is no separate `scylla-sync` service.
-
-## Manual Sync
-
-```bash
-curl -X POST http://localhost:8085/api/v1/notification/sync
-```
-
-The API reads salary records from `employee_salary`, joins employee details
-from `employee_info`, and upserts the resulting document into the
-`employee_index` Elasticsearch index. Existing `notified` state is preserved
-so synchronization does not cause duplicate emails.
-
-## Notification Workflow
-
-```text
-ScyllaDB
-   │
-   │ employee_salary + employee_info
-   ▼
-Notification API
-   │
-   ├── Sync / upsert
-   ▼
-Elasticsearch
-   │
-   ├── find notified=false
-   ▼
-Send Email
-   │
-   ▼
-Update notified=true
-```
-
-The `POST /api/v1/notification/send/all` endpoint performs the sync first and
-then processes pending notifications. Existing cron jobs or manual calls to
-`send/all` therefore continue to work without a separate sync worker.
-
-# Cron Example
-
-Reset notification status every month
-
-```cron
-0 0 1 * * cd /home/ubuntu/OT-Micro-Snatak-P18/Notification && /home/ubuntu/OT-Micro-Snatak-P18/Notification/venv/bin/python reset_notification_status.py
-```
-
-Trigger notifications
-
-```cron
-5 0 1 * * curl -X POST http://127.0.0.1:8085/api/v1/notification/send/all
-```
-
----
-
-# Notification Flow
-
-```
-Employee API / Salary API
-      │
-      ▼
-ScyllaDB
-      │
-      ▼
-Notification API
-(Scylla → Elasticsearch sync)
-      │
-      ▼
-Elasticsearch
-(notified = false)
-      │
-      ▼
-Notification API
-      │
-      ▼
-SMTP Server
-      │
-      ▼
-Employee Email
-      │
-      ▼
-Elasticsearch
-(notified = true)
-```
-
----
-
-# Technology Stack
-
-- Python
-- Flask
-- Elasticsearch
-- ScyllaDB
-- SMTP
-- Swagger
-- Prometheus
-- Systemd
-- Cron
+The bulk endpoint only reads existing Elasticsearch records and updates `notified=true` after a successful email. It performs no ScyllaDB synchronization.

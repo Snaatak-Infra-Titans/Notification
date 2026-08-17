@@ -23,7 +23,6 @@ from flask import Flask, jsonify, request
 from flasgger import Swagger
 from prometheus_flask_exporter import PrometheusMetrics
 from telemetry.telemetry import init_tracing
-from sync_service import sync_scylla_to_es
 from opentelemetry.instrumentation.flask import FlaskInstrumentor
 from middleware.logging import register_logging
 from utils.log_encoder import CustomJsonFormatter
@@ -410,30 +409,6 @@ def send_notification():
             "message": "Internal Server Error"
         }), 500
 
-@app.route("/api/v1/notification/sync", methods=["POST"])
-def sync_notifications_data():
-    """Synchronize ScyllaDB salary/employee data into Elasticsearch."""
-
-    logger.info("ScyllaDB -> Elasticsearch sync requested.")
-
-    try:
-        es = es_client()
-        result = sync_scylla_to_es(es, ES_INDEX)
-
-        return jsonify({
-            "status": "success",
-            "message": "ScyllaDB data synchronized to Elasticsearch.",
-            **result,
-        }), 200
-
-    except Exception:
-        logger.exception("ScyllaDB -> Elasticsearch sync request failed.")
-        return jsonify({
-            "status": "error",
-            "message": "Failed to synchronize ScyllaDB data to Elasticsearch.",
-        }), 500
-
-
 def process_pending_notifications(es):
     """Send email for all pending Elasticsearch notification records."""
     result = es.search(
@@ -499,18 +474,16 @@ def process_pending_notifications(es):
 
 @app.route("/api/v1/notification/send/all", methods=["POST"])
 def send_all_notifications():
-    """Synchronize ScyllaDB data and immediately notify pending employees."""
+    """Send notifications for pending records already present in Elasticsearch."""
     logger.info("Bulk notification request received.")
 
+    es = None
     try:
         es = es_client()
-        sync_result = sync_scylla_to_es(es, ES_INDEX)
         notification_result = process_pending_notifications(es)
-        es.close()
 
         return jsonify({
             "status": "success",
-            "sync": sync_result,
             **notification_result,
         }), 200
 
@@ -520,4 +493,8 @@ def send_all_notifications():
             "status": "error",
             "message": "Internal Server Error",
         }), 500
+
+    finally:
+        if es is not None:
+            es.close()
 
