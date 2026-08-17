@@ -2,44 +2,39 @@
 
 set -e
 
-CONFIG_FILE=${CONFIG_FILE:-"/app/config.yaml"}
+SYNC_INTERVAL="${SCYLLA_SYNC_INTERVAL:-5}"
 
-if [ ! -f "${CONFIG_FILE}" ]; then
+cleanup() {
+    echo "Stopping Notification API and sync worker..."
+    if [ -n "${SYNC_PID:-}" ]; then
+        kill "${SYNC_PID}" 2>/dev/null || true
+    fi
+}
 
-cat <<EOF > "${CONFIG_FILE}"
----
-server:
-  host: "0.0.0.0"
-  port: 8085
+trap cleanup INT TERM EXIT
 
-smtp:
-  from: "${FROM}"
-  username: "${SMTP_USERNAME}"
-  password: "${SMTP_PASSWORD}"
-  smtp_server: "${SMTP_SERVER}"
-  smtp_port: ${SMTP_PORT}
+echo "Waiting for Elasticsearch..."
 
-elasticsearch:
-  username: "${ELASTIC_USERNAME}"
-  password: "${ELASTIC_PASSWORD}"
-  host: "${ELASTIC_HOST}"
-  port: ${ELASTIC_PORT}
-  index: "${ELASTIC_INDEX:-employee_index}"
-EOF
+until nc -z "${ELASTIC_HOST}" "${ELASTIC_PORT}"
+do
+    echo "Elasticsearch is unavailable. Retrying in 5 seconds..."
+    sleep 5
+done
 
-fi
+echo "Elasticsearch is available."
+echo "Starting automatic ScyllaDB -> Elasticsearch sync worker (every ${SYNC_INTERVAL}s)..."
 
-export CONFIG_FILE=${CONFIG_FILE}
+python /app/sync_worker.py &
+SYNC_PID=$!
 
-echo "===================================================="
-echo "Starting Notification API"
-echo "Configuration : ${CONFIG_FILE}"
-echo "Port          : 8085"
-echo "===================================================="
+echo "Starting Notification API..."
 
-exec gunicorn \
-    --bind 0.0.0.0:8085 \
+gunicorn \
+    --bind 0.0.0.0:${SERVER_PORT:-8085} \
     --workers 2 \
     --threads 4 \
     --timeout 60 \
-    notification_api:app
+    notification_api:app &
+GUNICORN_PID=$!
+
+wait "${GUNICORN_PID}"

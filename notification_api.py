@@ -22,11 +22,22 @@ from elasticsearch import Elasticsearch
 from flask import Flask, jsonify, request
 from flasgger import Swagger
 from prometheus_flask_exporter import PrometheusMetrics
+from telemetry.telemetry import init_tracing
+from sync_service import sync_scylla_to_es
+from opentelemetry.instrumentation.flask import FlaskInstrumentor
+from middleware.logging import register_logging
+from utils.log_encoder import CustomJsonFormatter
 
 API_VERSION = "1.0"
 CONFIG_FILE = os.environ.get("CONFIG_FILE", "config.yaml")
 
 app = Flask(__name__)
+
+init_tracing()
+
+FlaskInstrumentor().instrument_app(app)
+
+register_logging(app)
 
 swagger_template = {
     "swagger": "2.0",
@@ -45,9 +56,9 @@ Swagger(app, template=swagger_template)
 
 PrometheusMetrics(app)
 
-FORMATTER = logging.Formatter(
-    "%(asctime)s %(levelname)s %(name)s %(message)s"
-)
+
+
+FORMATTER = CustomJsonFormatter()
 
 
 def get_logger():
@@ -89,15 +100,17 @@ def read_configuration():
 
 cfg = read_configuration()
 
+ES_INDEX = os.getenv("ELASTIC_INDEX", cfg.getProperty("elasticsearch.index"))
+
 def es_client():
     """
     Create and return an Elasticsearch client.
     """
     try:
-        host = cfg.getProperty("elasticsearch.host")
-        port = cfg.getProperty("elasticsearch.port")
-        username = cfg.getProperty("elasticsearch.username")
-        password = cfg.getProperty("elasticsearch.password")
+        host = os.getenv("ELASTIC_HOST", cfg.getProperty("elasticsearch.host"))
+        port = int(os.getenv("ELASTIC_PORT", str(cfg.getProperty("elasticsearch.port"))))
+        username = os.getenv("ELASTIC_USERNAME", cfg.getProperty("elasticsearch.username"))
+        password = os.getenv("ELASTIC_PASSWORD", cfg.getProperty("elasticsearch.password"))
 
         logger.info("Connecting to Elasticsearch at %s:%s", host, port)
 
@@ -115,14 +128,11 @@ def es_client():
             raise ConnectionError("Unable to connect to Elasticsearch")
 
         logger.info("Successfully connected to Elasticsearch.")
-
         return client
 
     except Exception as exc:
         logger.exception("Failed to connect to Elasticsearch.")
-        raise RuntimeError(
-            "Elasticsearch connection failed."
-        ) from exc
+        raise RuntimeError("Elasticsearch connection failed.") from exc
 
 def send_mail(
     email_id,
@@ -138,22 +148,33 @@ def send_mail(
 
     try:
 
-        smtp_host = cfg.getProperty("smtp.smtp_server")
-        smtp_port = int(cfg.getProperty("smtp.smtp_port"))
+        smtp_host = os.getenv(
+            "SMTP_SERVER",
+            cfg.getProperty("smtp.smtp_server")
+        )
+
+        smtp_port = int(
+            os.getenv(
+                "SMTP_PORT",
+                str(cfg.getProperty("smtp.smtp_port"))
+            )
+        )
+
         smtp_user = os.getenv(
             "SMTP_USERNAME",
             cfg.getProperty("smtp.username")
         )
-        
+
         smtp_pass = os.getenv(
             "SMTP_PASSWORD",
             cfg.getProperty("smtp.password")
         )
-        
+
         mail_from = os.getenv(
             "SMTP_FROM",
             cfg.getProperty("smtp.from")
         )
+
 
         msg = MIMEMultipart("alternative")
         msg["Subject"] = subject
@@ -389,170 +410,114 @@ def send_notification():
             "message": "Internal Server Error"
         }), 500
 
-@app.route("/api/v1/notification/send/all", methods=["POST"])
-def send_all_notifications():
-    """
-    Send Notifications to All Employees
-    ---
-    tags:
-      - Notification
+@app.route("/api/v1/notification/sync", methods=["POST"])
+def sync_notifications_data():
+    """Synchronize ScyllaDB salary/employee data into Elasticsearch."""
 
-    summary: Send notifications to all pending employees
-
-    description: |
-      Fetches all employees from Elasticsearch whose
-      `notified` field is false, sends an email to each,
-      and updates Elasticsearch to prevent duplicate
-      notifications.
-
-    produces:
-      - application/json
-
-    responses:
-      200:
-        description: Notifications processed successfully
-
-      500:
-        description: Internal server error
-    """
-
-    logger.info("Bulk notification request received.")
+    logger.info("ScyllaDB -> Elasticsearch sync requested.")
 
     try:
-
         es = es_client()
-
-        result = es.search(
-            index=cfg.getProperty("elasticsearch.index"),
-            body={
-                "query": {
-                    "bool": {
-                        "must_not": [
-                            {
-                                "term": {
-                                    "notified": True
-                                }
-                            }
-                        ]
-                    }
-                }
-            },
-        )
-
-        hits = result["hits"]["hits"]
-        logger.info("ES Result: %s", result)
-        logger.info("ES Hits Count: %s", len(hits))
-
-        if not hits:
-
-            logger.info("No employees pending notification.")
-
-            return jsonify({
-                "status": "success",
-                "message": "No pending notifications found.",
-                "notifications_sent": 0
-            }), 200
-
-        total_records = len(hits)
-        success_count = 0
-        failed_count = 0
-
-        for hit in hits:
-
-            source = hit["_source"]
-
-            email = source.get("email_id")
-
-            if not email:
-
-                logger.warning(
-                    "Skipping document %s because email_id is missing.",
-                    hit["_id"]
-                )
-
-                failed_count += 1
-
-                continue
-
-            if send_mail(email):
-
-                es.update(
-                    index=cfg.getProperty("elasticsearch.index"),
-                    id=hit["_id"],
-                    body={
-                        "doc": {
-                            "notified": True
-                        }
-                    },
-                )
-
-                logger.info(
-                    "Notification sent successfully to %s",
-                    email
-                )
-
-                success_count += 1
-
-            else:
-
-                logger.error(
-                    "Failed to send notification to %s",
-                    email
-                )
-
-                failed_count += 1
-
-        logger.info(
-            "Bulk notification completed. Success=%s Failed=%s",
-            success_count,
-            failed_count
-        )
+        result = sync_scylla_to_es(es, ES_INDEX)
 
         return jsonify({
-
             "status": "success",
-
-            "total_records": total_records,
-
-            "notifications_sent": success_count,
-
-            "failed_notifications": failed_count
-
+            "message": "ScyllaDB data synchronized to Elasticsearch.",
+            **result,
         }), 200
 
     except Exception:
-
-        logger.exception(
-            "Bulk notification processing failed."
-        )
-    
+        logger.exception("ScyllaDB -> Elasticsearch sync request failed.")
         return jsonify({
             "status": "error",
-            "message": "Internal Server Error"
+            "message": "Failed to synchronize ScyllaDB data to Elasticsearch.",
         }), 500
-   
-if __name__ == "__main__":
+
+
+def process_pending_notifications(es):
+    """Send email for all pending Elasticsearch notification records."""
+    result = es.search(
+        index=ES_INDEX,
+        body={
+            "query": {
+                "bool": {
+                    "must_not": [{"term": {"notified": True}}]
+                }
+            }
+        },
+    )
+
+    hits = result["hits"]["hits"]
+    logger.info("Pending notification count: %s", len(hits))
+
+    if not hits:
+        return {
+            "total_records": 0,
+            "notifications_sent": 0,
+            "failed_notifications": 0,
+        }
+
+    success_count = 0
+    failed_count = 0
+
+    for hit in hits:
+        source = hit["_source"]
+        email = source.get("email_id")
+
+        if not email:
+            logger.warning(
+                "Skipping document %s because email_id is missing.",
+                hit["_id"],
+            )
+            failed_count += 1
+            continue
+
+        if send_mail(email):
+            es.update(
+                index=ES_INDEX,
+                id=hit["_id"],
+                body={"doc": {"notified": True}},
+            )
+            logger.info("Notification sent successfully to %s", email)
+            success_count += 1
+        else:
+            logger.error("Failed to send notification to %s", email)
+            failed_count += 1
+
+    logger.info(
+        "Notification processing completed. Success=%s Failed=%s",
+        success_count,
+        failed_count,
+    )
+
+    return {
+        "total_records": len(hits),
+        "notifications_sent": success_count,
+        "failed_notifications": failed_count,
+    }
+
+
+@app.route("/api/v1/notification/send/all", methods=["POST"])
+def send_all_notifications():
+    """Synchronize ScyllaDB data and immediately notify pending employees."""
+    logger.info("Bulk notification request received.")
 
     try:
+        es = es_client()
+        sync_result = sync_scylla_to_es(es, ES_INDEX)
+        notification_result = process_pending_notifications(es)
+        es.close()
 
-        host = cfg.getProperty("server.host")
-        port = int(cfg.getProperty("server.port"))
-
-        logger.info("=" * 70)
-        logger.info("Notification API Started Successfully")
-        logger.info("Environment : %s", os.getenv("ENV", "local"))
-        logger.info("Configuration: %s", CONFIG_FILE)
-        logger.info("Port        : %s", port)
-        logger.info("Swagger UI  : http://%s:%s/apidocs/", host, port)
-        logger.info("Metrics     : http://%s:%s/metrics", host, port)
-        logger.info("=" * 70)
-        
-        app.run(
-            host=host,
-            port=port,
-            debug=False,
-        )
+        return jsonify({
+            "status": "success",
+            "sync": sync_result,
+            **notification_result,
+        }), 200
 
     except Exception:
-        logger.exception("Notification API failed to start.")
-        raise
+        logger.exception("Bulk notification processing failed.")
+        return jsonify({
+            "status": "error",
+            "message": "Internal Server Error",
+        }), 500
+

@@ -12,6 +12,7 @@ The Notification API is responsible for sending salary notification emails to em
 - Swagger API documentation
 - Prometheus metrics
 - Elasticsearch integration
+- ScyllaDB integration and ScyllaDB → Elasticsearch synchronization
 - SMTP email support
 
 ---
@@ -30,7 +31,7 @@ The Notification API is responsible for sending salary notification emails to em
 ```
 Notification/
 ├── notification_api.py
-├── scylla_to_es_sync.py
+├── sync_service.py
 ├── reset_notification_status.py
 ├── trigger_notifications.py
 ├── config.yaml
@@ -78,6 +79,13 @@ elasticsearch:
   host: 127.0.0.1
   port: 9200
   index: employee_index
+
+scylla:
+  host: 127.0.0.1
+  port: 9042
+  username: scylladb
+  password: password
+  keyspace: employee_db
 ```
 
 ---
@@ -164,6 +172,27 @@ to prevent duplicate emails.
 
 ---
 
+# Synchronize ScyllaDB to Elasticsearch
+
+```
+POST /api/v1/notification/sync
+```
+
+Example:
+
+```bash
+curl -X POST http://localhost:8085/api/v1/notification/sync
+```
+
+The endpoint reads salary records from `employee_salary`, joins employee
+details from `employee_info`, and upserts them into the `employee_index`
+Elasticsearch index. Existing `notified` state is preserved.
+
+The `POST /api/v1/notification/send/all` endpoint performs this synchronization
+before processing pending notifications, so no separate sync process is needed.
+
+---
+
 # Monthly Notification Workflow
 
 ## Step 1
@@ -210,75 +239,45 @@ notified = true
 
 # ScyllaDB to Elasticsearch Sync
 
-Run
+ScyllaDB is the source of truth for employee and salary data. The
+Notification API now owns the ScyllaDB → Elasticsearch synchronization.
+There is no separate `scylla-sync` service.
+
+## Manual Sync
 
 ```bash
-python scylla_to_es_sync.py
+curl -X POST http://localhost:8085/api/v1/notification/sync
 ```
 
-The sync worker
+The API reads salary records from `employee_salary`, joins employee details
+from `employee_info`, and upserts the resulting document into the
+`employee_index` Elasticsearch index. Existing `notified` state is preserved
+so synchronization does not cause duplicate emails.
 
-- Reads employee data from ScyllaDB
-- Reads salary information
-- Creates Elasticsearch documents
-- Automatically triggers Notification API
+## Notification Workflow
 
----
-
-# Swagger
-
-```
-http://localhost:8085/apidocs/
-```
-
----
-
-# Prometheus Metrics
-
-```
-http://localhost:8085/metrics
-```
-
----
-
-# Systemd Services
-
+```text
+ScyllaDB
+   │
+   │ employee_salary + employee_info
+   ▼
 Notification API
-
-```bash
-sudo systemctl status notification-api
+   │
+   ├── Sync / upsert
+   ▼
+Elasticsearch
+   │
+   ├── find notified=false
+   ▼
+Send Email
+   │
+   ▼
+Update notified=true
 ```
 
-Notification Sync
-
-```bash
-sudo systemctl status notification-sync
-```
-
-Restart
-
-```bash
-sudo systemctl restart notification-api
-sudo systemctl restart notification-sync
-```
-
----
-
-# Logs
-
-Notification API
-
-```bash
-tail -f ~/logs/notification-api.log
-```
-
-Notification Sync
-
-```bash
-tail -f ~/logs/notification-sync.log
-```
-
----
+The `POST /api/v1/notification/send/all` endpoint performs the sync first and
+then processes pending notifications. Existing cron jobs or manual calls to
+`send/all` therefore continue to work without a separate sync worker.
 
 # Cron Example
 
@@ -299,14 +298,14 @@ Trigger notifications
 # Notification Flow
 
 ```
-Employee API
+Employee API / Salary API
       │
       ▼
 ScyllaDB
       │
       ▼
-Sync Worker
-(sc ylla_to_es_sync.py)
+Notification API
+(Scylla → Elasticsearch sync)
       │
       ▼
 Elasticsearch
