@@ -1,40 +1,23 @@
 #!/bin/sh
-
 set -e
 
-SYNC_INTERVAL="${SCYLLA_SYNC_INTERVAL:-5}"
+ES_HOST="${ELASTIC_HOST:-localhost}"
+ES_PORT="${ELASTIC_PORT:-9200}"
 
-cleanup() {
-    echo "Stopping Notification API and sync worker..."
-    if [ -n "${SYNC_PID:-}" ]; then
-        kill "${SYNC_PID}" 2>/dev/null || true
-    fi
-}
+echo "Waiting for Elasticsearch at ${ES_HOST}:${ES_PORT}..."
 
-trap cleanup INT TERM EXIT
-
-echo "Waiting for Elasticsearch..."
-
-until nc -z "${ELASTIC_HOST:-localhost}" "${ELASTIC_PORT:-9200}"
+until nc -z "${ES_HOST}" "${ES_PORT}"
 do
     echo "Elasticsearch is unavailable. Retrying in 5 seconds..."
     sleep 5
 done
 
 echo "Elasticsearch is available."
-echo "Starting automatic ScyllaDB -> Elasticsearch sync worker (every ${SYNC_INTERVAL}s)..."
-
-python /app/sync_worker.py &
-SYNC_PID=$!
-
 echo "Starting Notification API..."
 
-gunicorn \
+exec gunicorn \
     --bind 0.0.0.0:${SERVER_PORT:-8085} \
     --workers 2 \
     --threads 4 \
     --timeout 60 \
-    notification_api:app &
-GUNICORN_PID=$!
-
-wait "${GUNICORN_PID}"
+    notification_api:app

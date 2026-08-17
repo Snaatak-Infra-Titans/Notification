@@ -29,7 +29,6 @@ def init_tracing():
         "OTEL_EXPORTER_OTLP_ENDPOINT",
         "http://otel-collector:4318/v1/traces",
     )
-
     exporter = OTLPSpanExporter(endpoint=endpoint)
 
     provider.add_span_processor(
