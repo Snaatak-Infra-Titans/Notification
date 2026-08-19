@@ -1,5 +1,3 @@
-"""OpenTelemetry setup for the Notification service."""
-
 import os
 
 from opentelemetry import trace
@@ -8,18 +6,12 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 
-_SERVICE_NAME = "notification-api"
-_TRACER_NAME = "notification-api"
-
 
 def init_tracing():
-    """Initialize OTLP tracing once per Notification process."""
-    if isinstance(trace.get_tracer_provider(), TracerProvider):
-        return
-
     resource = Resource.create(
         {
-            "service.name": _SERVICE_NAME,
+            "service.name": "notification-api",
+            "service.version": "1.0.0",
         }
     )
 
@@ -27,17 +19,15 @@ def init_tracing():
 
     endpoint = os.getenv(
         "OTEL_EXPORTER_OTLP_ENDPOINT",
-        "http://otel-collector:4318/v1/traces",
+        "http://otms.monitoring.internal:4318/v1/traces",
     )
-    exporter = OTLPSpanExporter(endpoint=endpoint)
+
+    exporter = OTLPSpanExporter(
+        endpoint=endpoint,
+    )
 
     provider.add_span_processor(
         BatchSpanProcessor(exporter)
     )
 
     trace.set_tracer_provider(provider)
-
-
-def get_tracer():
-    """Return the tracer used by Notification application instrumentation."""
-    return trace.get_tracer(_TRACER_NAME)
