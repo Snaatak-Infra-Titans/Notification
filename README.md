@@ -338,3 +338,21 @@ Elasticsearch
 - Prometheus
 - Systemd
 - Cron
+
+## OpenTelemetry Verification
+
+The Notification API exports OpenTelemetry traces, metrics, and logs to the central OTEL Collector.
+
+Expected OTLP base endpoint:
+
+```text
+http://otms.monitoring.internal:4318
+```
+
+Signals:
+
+- traces: `/v1/traces`
+- metrics: `/v1/metrics`
+- logs: `/v1/logs`
+
+The API also exposes `/metrics` through `prometheus-flask-exporter` for direct Prometheus scraping.
