@@ -1,0 +1,41 @@
+# /etc/systemd/system/notification-api.service
+[Unit]
+Description=OT-Micro Notification API
+After=network-online.target elasticsearch.service
+Wants=network-online.target
+Requires=elasticsearch.service
+
+[Service]
+Type=simple
+
+User=ubuntu
+Group=ubuntu
+
+WorkingDirectory=/home/ubuntu/Notification
+
+Environment="SERVER_HOST=0.0.0.0"
+Environment="SERVER_PORT=8085"
+Environment="CONFIG_FILE=/home/ubuntu/Notification/config.yaml"
+
+# OpenTelemetry
+Environment="OTEL_EXPORTER_OTLP_ENDPOINT=http://otms.monitoring.internal:4318"
+Environment="OTEL_SERVICE_NAME=notification-api"
+Environment="OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf"
+
+EnvironmentFile=-/etc/notification/notification.env
+
+ExecStart=/home/ubuntu/Notification/.venv/bin/gunicorn \
+    --bind 0.0.0.0:8085 \
+    --workers 2 \
+    --threads 4 \
+    --timeout 60 \
+    notification_api:app
+
+Restart=always
+RestartSec=5
+
+StandardOutput=append:/home/ubuntu/logs/notification-api.log
+StandardError=append:/home/ubuntu/logs/notification-api.log
+
+[Install]
+WantedBy=multi-user.target
